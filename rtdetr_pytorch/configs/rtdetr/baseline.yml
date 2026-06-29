@@ -1,0 +1,50 @@
+__include__: [
+  '../dataset/pcb_detection.yml',
+  '../runtime.yml',
+  './include/dataloader.yml',
+  './include/optimizer.yml',
+  './include/rtdetr_r50vd.yml',
+]
+
+# Baseline experiment: RT-DETR-R18 on PKU PCB defect dataset.
+output_dir: "D:/Learn/RTDETR/RT-DETR-main/output/baseline"
+
+# This project uses the field name "epoches".
+epoches: 200
+
+# Save periodic checkpoints every 50 epochs.
+checkpoint_step: 50
+
+PResNet:
+  depth: 18
+  freeze_at: -1
+  freeze_norm: False
+  pretrained: True
+
+HybridEncoder:
+  in_channels: [128, 256, 512]
+  hidden_dim: 256
+  expansion: 0.5
+
+RTDETRTransformer:
+  eval_idx: -1
+  num_decoder_layers: 3
+  num_denoising: 100
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?=.*norm).*$'
+      lr: 0.00001
+      weight_decay: 0.
+    -
+      params: '^(?=.*backbone)(?!.*norm).*$'
+      lr: 0.00001
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bias)).*$'
+      weight_decay: 0.
+
+  lr: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001

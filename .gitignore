@@ -1,0 +1,36 @@
+# IDE
+.vscode/
+
+# Dataset and weights
+DataSet/
+PretrainingWeight/
+
+# Zip files
+*.zip
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Training outputs
+runs/
+output/
+outputs/
+results/
+checkpoints/
+weights/
+logs/
+wandb/
+
+# Model files
+*.pt
+*.pth
+*.onnx
+*.engine
+*.ckpt
+
+# OS
+.DS_Store
+Thumbs.db
