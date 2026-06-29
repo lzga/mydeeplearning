@@ -1,0 +1,57 @@
+__include__: [
+  '../dataset/pcb_detection.yml',
+  '../runtime.yml',
+  './include/dataloader.yml',
+  './include/optimizer.yml',
+  './include/rtdetr_r50vd.yml',
+]
+
+# FB-C5 + ASSA: FasterBlock at C5 + ASSA in AIFI encoder
+output_dir: "D:/Learn/RTDETR/RT-DETR-main/output/fb_c5_assa"
+
+epoches: 200
+checkpoint_step: 50
+
+PResNet:
+  depth: 18
+  freeze_at: -1
+  freeze_norm: False
+  pretrained: True
+
+  use_fasterblock: True
+  fasterblock_replace_stages: [3]
+  fasterblock_replace_mode: last
+  fasterblock_n_div: 4
+  fasterblock_mlp_ratio: 2.0
+
+HybridEncoder:
+  in_channels: [128, 256, 512]
+  hidden_dim: 256
+  expansion: 0.5
+  # ASSA
+  use_assa: true
+  assa_topk_ratio: 0.75
+  assa_warmup_epochs: 5
+
+RTDETRTransformer:
+  eval_idx: -1
+  num_decoder_layers: 3
+  num_denoising: 100
+
+optimizer:
+  type: AdamW
+  params:
+    -
+      params: '^(?=.*backbone)(?=.*norm).*$'
+      lr: 0.00001
+      weight_decay: 0.
+    -
+      params: '^(?=.*backbone)(?!.*norm).*$'
+      lr: 0.00001
+    -
+      params: '^(?=.*(?:encoder|decoder))(?=.*(?:norm|bias)).*$'
+      weight_decay: 0.
+
+  lr: 0.0001
+  betas: [0.9, 0.999]
+  weight_decay: 0.0001

@@ -98,6 +98,9 @@ class DetSolver(BaseSolver):
             if dist.is_dist_available_and_initialized():
                 self.train_dataloader.sampler.set_epoch(epoch)
 
+            # ---- ASSA warmup ----
+            self._apply_assa_warmup(epoch)
+
             train_stats = train_one_epoch(
                 self.model, self.criterion, self.train_dataloader, self.optimizer, self.device, epoch,
                 args.clip_max_norm, print_freq=args.log_step, ema=self.ema, scaler=self.scaler
@@ -210,6 +213,24 @@ class DetSolver(BaseSolver):
                 p.mkdir(parents=True, exist_ok=True)
 
         self.metrics_rows = []
+
+    def _apply_assa_warmup(self, epoch: int):
+        """Apply ASSA warmup factor based on current epoch.
+
+        During the first ``assa_warmup_epochs``, the ASSA Top-K ratio is
+        linearly annealed from 1.0 (dense attention) to the target ratio.
+        After warmup, the factor stays at 1.0 (full target sparsity).
+        """
+        encoder = self.model
+        # unwrap DDP / EMA
+        if hasattr(encoder, 'module'):
+            encoder = encoder.module
+        if hasattr(encoder, 'encoder') and hasattr(encoder.encoder, 'assa_warmup_epochs'):
+            warmup_epochs = encoder.encoder.assa_warmup_epochs
+            if warmup_epochs <= 0:
+                return
+            factor = min(1.0, epoch / warmup_epochs)
+            encoder.encoder.set_assa_warmup_factor(factor)
 
     def _save_run_config_summary(self):
         if not dist.is_main_process():
