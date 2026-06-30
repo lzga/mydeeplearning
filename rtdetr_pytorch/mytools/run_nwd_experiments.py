@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 r"""
-串行训练脚本：baseline → FB-C5 → baseline+ASSA → FB-C5+ASSA
+串行训练脚本：baseline+NWD → FB-C5+ASSA+NWD
 
-四组实验串行运行，随机种子统一为 seed=4，确保公平对比。
+两组实验串行运行，随机种子统一为 seed=4，确保公平对比。
+训练全部正常结束后自动关机。
 
 运行方式：
-  python mytools/run_assa_experiments.py
+  python mytools/run_nwd_experiments.py
 
 实验矩阵：
-  实验0: baseline         (RT-DETR-R18 原始)
-  实验1: FB-C5            (FasterBlock at C5 only)
-  实验2: baseline+ASSA     (ASSA Top-K=0.75 in AIFI)
-  实验3: FB-C5+ASSA       (FasterBlock C5 + ASSA Top-K=0.75)
+  实验0: baseline+NWD      (λ=0.5, C=16.0)
+  实验1: FB-C5+ASSA+NWD   (FasterBlock C5 + ASSA Top-K=0.75 + NWD λ=0.5)
 """
 
 from __future__ import annotations
@@ -36,18 +35,20 @@ CUDA_VISIBLE_DEVICES = "0"
 SEED = 4
 
 # ---- 自动关机设置 ----
-# 训练全部正常结束后，自动关机。
-# Windows 下取消关机命令：shutdown /a
 AUTO_SHUTDOWN = True
 SHUTDOWN_DELAY_SECONDS = 60
-SHUTDOWN_ON_ERROR = False  # 若某个实验失败，是否仍然在最后关机
 
 # ---- 实验定义 ----
 EXPERIMENTS = [
     {
-        "name": "fb_c5_assa",
-        "config": "configs/rtdetr/fb_c5_assa.yml",
-        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\fb_c5_assa",
+        "name": "baseline_nwd",
+        "config": "configs/rtdetr/baseline_nwd.yml",
+        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\baseline_nwd",
+    },
+    {
+        "name": "fb_c5_assa_nwd",
+        "config": "configs/rtdetr/fb_c5_assa_nwd.yml",
+        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\fb_c5_assa_nwd",
     },
 ]
 
@@ -89,7 +90,6 @@ def relaunch_if_needed() -> None:
 
     if current_python != target_python:
         print("当前 Python 不是 rtdetr 环境，正在用 rtdetr 环境重新启动本脚本...")
-        import subprocess
         cmd = [str(RTDETR_PYTHON), str(Path(__file__).resolve()), "--relaunched"]
         result = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=os.environ.copy())
         raise SystemExit(result.returncode)
@@ -112,14 +112,21 @@ def check_required_files() -> None:
             raise FileNotFoundError(f"配置文件不存在：{config_file}")
         print(f"[OK] {exp['name']} config: {config_file}")
 
-    # verify ASSA support in hybrid_encoder.py
+    # verify NWD support
+    criterion_path = PROJECT_ROOT / "src" / "zoo" / "rtdetr" / "rtdetr_criterion.py"
+    criterion_text = criterion_path.read_text(encoding="utf-8", errors="replace")
+    if "_compute_nwd_loss" not in criterion_text:
+        raise RuntimeError("rtdetr_criterion.py 中没有检测到 NWD 支持。")
+    print("[OK] rtdetr_criterion.py 已包含 NWD 支持")
+
+    # verify ASSA support
     encoder_path = PROJECT_ROOT / "src" / "zoo" / "rtdetr" / "hybrid_encoder.py"
     encoder_text = encoder_path.read_text(encoding="utf-8", errors="replace")
     if "AdaptiveSparseSelfAttention" not in encoder_text:
         raise RuntimeError("hybrid_encoder.py 中没有检测到 AdaptiveSparseSelfAttention 支持。")
     print("[OK] hybrid_encoder.py 已包含 ASSA 支持")
 
-    # verify FasterBlock support (same check as run_c5.py)
+    # verify FasterBlock support
     presnet_path = PROJECT_ROOT / "src" / "nn" / "backbone" / "presnet.py"
     presnet_text = presnet_path.read_text(encoding="utf-8", errors="replace")
     if "class FasterBlock" not in presnet_text or "use_fasterblock" not in presnet_text:
@@ -194,7 +201,6 @@ def run_experiment(exp_name: str, config_arg: str, output_dir: Path) -> None:
             print(f"最新日志: {latest_log_path}")
 
 
-
 def schedule_shutdown(delay_seconds: int = 60) -> None:
     """Schedule system shutdown after training finishes."""
     delay_seconds = max(0, int(delay_seconds))
@@ -230,8 +236,6 @@ def main() -> None:
     check_cuda()
 
     total = len(EXPERIMENTS)
-    failed_experiments = []
-
     for idx, exp in enumerate(EXPERIMENTS, start=1):
         header(f"===== 实验 {idx}/{total}: {exp['name']} =====")
         set_random_seed(SEED)
@@ -244,7 +248,6 @@ def main() -> None:
         except SystemExit:
             raise
         except Exception:
-            failed_experiments.append(exp["name"])
             print(f"\n实验 {exp['name']} 运行失败，错误信息：")
             traceback.print_exc()
             print(f"\n跳过 {exp['name']}，继续下一个实验...")
@@ -253,16 +256,10 @@ def main() -> None:
     header("===== 全部实验结束 =====")
     print("实验汇总：")
     for exp in EXPERIMENTS:
-        status = "失败" if exp["name"] in failed_experiments else "完成"
-        print(f"  {exp['name']}: {status} | {exp['output_dir']}")
+        print(f"  {exp['name']}: {exp['output_dir']}")
 
-    if failed_experiments:
-        print("\n以下实验失败：" + ", ".join(failed_experiments))
-
-    if AUTO_SHUTDOWN and (not failed_experiments or SHUTDOWN_ON_ERROR):
+    if AUTO_SHUTDOWN:
         schedule_shutdown(SHUTDOWN_DELAY_SECONDS)
-    elif AUTO_SHUTDOWN and failed_experiments and not SHUTDOWN_ON_ERROR:
-        print("\n检测到实验失败，已跳过自动关机。若仍希望失败后关机，请设置 SHUTDOWN_ON_ERROR = True。")
 
 
 if __name__ == "__main__":

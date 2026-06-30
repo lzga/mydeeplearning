@@ -29,7 +29,8 @@ class SetCriterion(nn.Module):
     __share__ = ['num_classes', ]
     __inject__ = ['matcher', ]
 
-    def __init__(self, matcher, weight_dict, losses, alpha=0.2, gamma=2.0, eos_coef=1e-4, num_classes=80):
+    def __init__(self, matcher, weight_dict, losses, alpha=0.2, gamma=2.0, eos_coef=1e-4, num_classes=80,
+                 use_nwd=False, nwd_weight=0.5, nwd_constant=16.0):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -37,12 +38,18 @@ class SetCriterion(nn.Module):
             weight_dict: dict containing as key the names of the losses and as values their relative weight.
             eos_coef: relative classification weight applied to the no-object category
             losses: list of all the losses to be applied. See get_loss for list of available losses.
+            use_nwd: whether to add NWD (Normalized Wasserstein Distance) loss
+            nwd_weight: weight multiplier for NWD loss term (only used if use_nwd=True)
+            nwd_constant: dataset-dependent normalization constant C for NWD
         """
         super().__init__()
         self.num_classes = num_classes
         self.matcher = matcher
         self.weight_dict = weight_dict
-        self.losses = losses 
+        self.losses = losses
+        self.use_nwd = use_nwd
+        self.nwd_weight = nwd_weight
+        self.nwd_constant = nwd_constant
 
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = eos_coef
@@ -168,7 +175,43 @@ class SetCriterion(nn.Module):
                 box_cxcywh_to_xyxy(src_boxes),
                 box_cxcywh_to_xyxy(target_boxes)))
         losses['loss_giou'] = loss_giou.sum() / num_boxes
+
+        if self.use_nwd:
+            loss_nwd = self._compute_nwd_loss(src_boxes, target_boxes)
+            losses['loss_nwd'] = loss_nwd.sum() / num_boxes
         return losses
+
+    def _compute_nwd_loss(self, pred_boxes, target_boxes):
+        """Normalized Wasserstein Distance loss.
+
+        Models each bounding box as a 2D Gaussian distribution:
+          mu = [cx, cy]
+          Sigma = diag(w^2/4, h^2/4)
+
+        Then W_2^2(N_pred, N_gt) = ||[cx_p,cy_p,w_p/2,h_p/2] - [cx_g,cy_g,w_g/2,h_g/2]||_2^2
+
+        NWD = exp(-sqrt(W_2^2) / C)
+        L_NWD = 1 - NWD
+
+        Args:
+            pred_boxes: [N, 4] in (cx, cy, w, h) normalized
+            target_boxes: [N, 4] in (cx, cy, w, h) normalized
+            C: normalization constant (nwd_constant)
+        Returns:
+            loss_nwd: [N]
+        """
+        C = self.nwd_constant / 640.0  # normalize to [0,1] coordinates
+        pred = torch.stack([
+            pred_boxes[:, 0], pred_boxes[:, 1],
+            pred_boxes[:, 2] / 2.0, pred_boxes[:, 3] / 2.0,
+        ], dim=-1)
+        tgt = torch.stack([
+            target_boxes[:, 0], target_boxes[:, 1],
+            target_boxes[:, 2] / 2.0, target_boxes[:, 3] / 2.0,
+        ], dim=-1)
+        w2 = torch.sum((pred - tgt) ** 2, dim=-1)
+        nwd = torch.exp(-torch.sqrt(w2) / C)
+        return self.nwd_weight * (1.0 - nwd)
 
     def loss_masks(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the masks: the focal loss and the dice loss.
