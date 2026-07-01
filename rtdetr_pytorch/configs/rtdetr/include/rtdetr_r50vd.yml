@@ -75,8 +75,8 @@ SetCriterion:
   soa_nwd_input_size: 640.0
   soa_nwd_small_threshold: 16.0
   soa_nwd_medium_threshold: 32.0
-  soa_nwd_small_weight: 0.25
-  soa_nwd_medium_weight: 0.10
+  soa_nwd_small_weight: 0.15
+  soa_nwd_medium_weight: 0.05
   soa_nwd_large_weight: 0.0
   soa_nwd_main_only: true
 

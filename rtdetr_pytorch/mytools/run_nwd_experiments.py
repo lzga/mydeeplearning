@@ -14,8 +14,8 @@ r"""
 
 NWD 策略：
   s = sqrt(w_gt * h_gt) * 640
-  s < 16px      -> NWD weight = 0.25
-  16px <= s <32 -> NWD weight = 0.10
+  s < 16px      -> NWD weight = 0.15
+  16px <= s <32 -> NWD weight = 0.05
   s >= 32px     -> NWD weight = 0.00
   仅作用于最终 decoder 输出，不作用于 aux/dn 分支。
 """
@@ -51,12 +51,12 @@ EXPERIMENTS = [
     {
         "name": "baseline_soa_nwd",
         "config": "configs/rtdetr/baseline_soa_nwd.yml",
-        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\baseline_soa_nwd",
+        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\baseline_soa_nwd_map50",
     },
     # {
     #     "name": "fb_c5_assa_soa_nwd",
     #     "config": "configs/rtdetr/fb_c5_assa_soa_nwd.yml",
-    #     "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\fb_c5_assa_soa_nwd",
+    #     "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\fb_c5_assa_soa_nwd_map50",
     # },
 ]
 

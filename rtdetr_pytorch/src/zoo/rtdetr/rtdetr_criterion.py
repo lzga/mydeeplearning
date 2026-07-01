@@ -35,8 +35,8 @@ class SetCriterion(nn.Module):
                  soa_nwd_input_size=640.0,
                  soa_nwd_small_threshold=16.0,
                  soa_nwd_medium_threshold=32.0,
-                 soa_nwd_small_weight=0.25,
-                 soa_nwd_medium_weight=0.10,
+                 soa_nwd_small_weight=0.15,
+                 soa_nwd_medium_weight=0.05,
                  soa_nwd_large_weight=0.0,
                  soa_nwd_main_only=True):
         """ Create the criterion.
@@ -51,8 +51,8 @@ class SetCriterion(nn.Module):
             soa_nwd_input_size: image scale used to estimate target size from normalized boxes.
             soa_nwd_small_threshold: targets with sqrt(w*h)*input_size below this value use small weight.
             soa_nwd_medium_threshold: targets between small and medium thresholds use medium weight.
-            soa_nwd_small_weight: per-box NWD multiplier for small targets.
-            soa_nwd_medium_weight: per-box NWD multiplier for medium targets.
+            soa_nwd_small_weight: per-box NWD multiplier for small targets. Default 0.15 is a conservative mAP50-oriented setting.
+            soa_nwd_medium_weight: per-box NWD multiplier for medium targets. Default 0.05 is used to avoid over-constraining coarse localization.
             soa_nwd_large_weight: per-box NWD multiplier for large targets, usually 0.0.
             soa_nwd_main_only: if True, applies NWD only to the final decoder output, not aux/dn outputs.
         """
