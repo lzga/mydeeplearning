@@ -65,13 +65,20 @@ RTDETRPostProcessor:
 
 
 SetCriterion:
-  weight_dict: {loss_vfl: 1, loss_bbox: 5, loss_giou: 2, loss_nwd: 1}
+  weight_dict: {loss_vfl: 1, loss_bbox: 5, loss_giou: 2, loss_soa_nwd: 1}
   losses: ['vfl', 'boxes', ]
   alpha: 0.75
   gamma: 2.0
-  use_nwd: false
-  nwd_weight: 0.5
-  nwd_constant: 16.0
+  # Small-object-aware NWD is disabled by default and enabled only in specific experiment configs.
+  use_small_object_aware_nwd: false
+  soa_nwd_constant: 16.0
+  soa_nwd_input_size: 640.0
+  soa_nwd_small_threshold: 16.0
+  soa_nwd_medium_threshold: 32.0
+  soa_nwd_small_weight: 0.25
+  soa_nwd_medium_weight: 0.10
+  soa_nwd_large_weight: 0.0
+  soa_nwd_main_only: true
 
   matcher:
     type: HungarianMatcher

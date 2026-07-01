@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 r"""
-串行训练脚本：baseline+NWD → FB-C5+ASSA+NWD
+串行训练脚本：baseline + small-object-aware NWD → FB-C5 + ASSA + small-object-aware NWD
 
 两组实验串行运行，随机种子统一为 seed=4，确保公平对比。
 训练全部正常结束后自动关机。
@@ -9,8 +9,15 @@ r"""
   python mytools/run_nwd_experiments.py
 
 实验矩阵：
-  实验0: baseline+NWD      (λ=0.5, C=16.0)
-  实验1: FB-C5+ASSA+NWD   (FasterBlock C5 + ASSA Top-K=0.75 + NWD λ=0.5)
+  实验0: baseline + small-object-aware NWD
+  实验1: FB-C5 + ASSA + small-object-aware NWD
+
+NWD 策略：
+  s = sqrt(w_gt * h_gt) * 640
+  s < 16px      -> NWD weight = 0.25
+  16px <= s <32 -> NWD weight = 0.10
+  s >= 32px     -> NWD weight = 0.00
+  仅作用于最终 decoder 输出，不作用于 aux/dn 分支。
 """
 
 from __future__ import annotations
@@ -37,19 +44,20 @@ SEED = 4
 # ---- 自动关机设置 ----
 AUTO_SHUTDOWN = True
 SHUTDOWN_DELAY_SECONDS = 60
+SHUTDOWN_ON_ERROR = False  # True: 即使有实验失败，也在脚本结束时自动关机
 
 # ---- 实验定义 ----
 EXPERIMENTS = [
     {
-        "name": "baseline_nwd",
-        "config": "configs/rtdetr/baseline_nwd.yml",
-        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\baseline_nwd",
+        "name": "baseline_soa_nwd",
+        "config": "configs/rtdetr/baseline_soa_nwd.yml",
+        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\baseline_soa_nwd",
     },
-    {
-        "name": "fb_c5_assa_nwd",
-        "config": "configs/rtdetr/fb_c5_assa_nwd.yml",
-        "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\fb_c5_assa_nwd",
-    },
+    # {
+    #     "name": "fb_c5_assa_soa_nwd",
+    #     "config": "configs/rtdetr/fb_c5_assa_soa_nwd.yml",
+    #     "output_dir": r"D:\Learn\RTDETR\RT-DETR-main\output\fb_c5_assa_soa_nwd",
+    # },
 ]
 
 
@@ -112,12 +120,19 @@ def check_required_files() -> None:
             raise FileNotFoundError(f"配置文件不存在：{config_file}")
         print(f"[OK] {exp['name']} config: {config_file}")
 
-    # verify NWD support
+    # verify small-object-aware NWD support
     criterion_path = PROJECT_ROOT / "src" / "zoo" / "rtdetr" / "rtdetr_criterion.py"
     criterion_text = criterion_path.read_text(encoding="utf-8", errors="replace")
-    if "_compute_nwd_loss" not in criterion_text:
-        raise RuntimeError("rtdetr_criterion.py 中没有检测到 NWD 支持。")
-    print("[OK] rtdetr_criterion.py 已包含 NWD 支持")
+    required_tokens = [
+        "use_small_object_aware_nwd",
+        "_compute_small_object_aware_nwd_loss",
+        "loss_soa_nwd",
+        "apply_soa_nwd",
+    ]
+    missing = [token for token in required_tokens if token not in criterion_text]
+    if missing:
+        raise RuntimeError(f"rtdetr_criterion.py 中没有检测到 small-object-aware NWD 支持：{missing}")
+    print("[OK] rtdetr_criterion.py 已包含 small-object-aware NWD 支持")
 
     # verify ASSA support
     encoder_path = PROJECT_ROOT / "src" / "zoo" / "rtdetr" / "hybrid_encoder.py"
@@ -235,6 +250,7 @@ def main() -> None:
     header("检查 CUDA")
     check_cuda()
 
+    failed_experiments = []
     total = len(EXPERIMENTS)
     for idx, exp in enumerate(EXPERIMENTS, start=1):
         header(f"===== 实验 {idx}/{total}: {exp['name']} =====")
@@ -248,6 +264,7 @@ def main() -> None:
         except SystemExit:
             raise
         except Exception:
+            failed_experiments.append(exp["name"])
             print(f"\n实验 {exp['name']} 运行失败，错误信息：")
             traceback.print_exc()
             print(f"\n跳过 {exp['name']}，继续下一个实验...")
@@ -256,10 +273,14 @@ def main() -> None:
     header("===== 全部实验结束 =====")
     print("实验汇总：")
     for exp in EXPERIMENTS:
-        print(f"  {exp['name']}: {exp['output_dir']}")
+        status = "失败" if exp["name"] in failed_experiments else "完成"
+        print(f"  {exp['name']}: {exp['output_dir']}  [{status}]")
 
     if AUTO_SHUTDOWN:
-        schedule_shutdown(SHUTDOWN_DELAY_SECONDS)
+        if failed_experiments and not SHUTDOWN_ON_ERROR:
+            print("\n检测到实验失败，已跳过自动关机。若仍希望失败后关机，请设置 SHUTDOWN_ON_ERROR = True。")
+        else:
+            schedule_shutdown(SHUTDOWN_DELAY_SECONDS)
 
 
 if __name__ == "__main__":

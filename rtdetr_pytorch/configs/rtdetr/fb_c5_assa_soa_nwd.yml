@@ -6,8 +6,9 @@ __include__: [
   './include/rtdetr_r50vd.yml',
 ]
 
-# FB-C5 + ASSA + NWD: FasterBlock C5 + ASSA Top-K=0.75 + NWD loss (λ=0.5, C=16.0)
-output_dir: "D:/Learn/RTDETR/RT-DETR-main/output/fb_c5_assa_nwd"
+# FB-C5 + ASSA + small-object-aware NWD.
+# NWD is applied only to the final decoder output and is weighted by target size.
+output_dir: "D:/Learn/RTDETR/RT-DETR-main/output/fb_c5_assa_soa_nwd"
 
 epoches: 200
 checkpoint_step: 50
@@ -39,9 +40,15 @@ RTDETRTransformer:
   num_denoising: 100
 
 SetCriterion:
-  use_nwd: true
-  nwd_weight: 0.5
-  nwd_constant: 16.0
+  use_small_object_aware_nwd: true
+  soa_nwd_constant: 16.0
+  soa_nwd_input_size: 640.0
+  soa_nwd_small_threshold: 16.0
+  soa_nwd_medium_threshold: 32.0
+  soa_nwd_small_weight: 0.25
+  soa_nwd_medium_weight: 0.10
+  soa_nwd_large_weight: 0.0
+  soa_nwd_main_only: true
 
 optimizer:
   type: AdamW

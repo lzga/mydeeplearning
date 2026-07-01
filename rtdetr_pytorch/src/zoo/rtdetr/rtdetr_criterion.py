@@ -30,7 +30,15 @@ class SetCriterion(nn.Module):
     __inject__ = ['matcher', ]
 
     def __init__(self, matcher, weight_dict, losses, alpha=0.2, gamma=2.0, eos_coef=1e-4, num_classes=80,
-                 use_nwd=False, nwd_weight=0.5, nwd_constant=16.0):
+                 use_small_object_aware_nwd=False,
+                 soa_nwd_constant=16.0,
+                 soa_nwd_input_size=640.0,
+                 soa_nwd_small_threshold=16.0,
+                 soa_nwd_medium_threshold=32.0,
+                 soa_nwd_small_weight=0.25,
+                 soa_nwd_medium_weight=0.10,
+                 soa_nwd_large_weight=0.0,
+                 soa_nwd_main_only=True):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -38,18 +46,30 @@ class SetCriterion(nn.Module):
             weight_dict: dict containing as key the names of the losses and as values their relative weight.
             eos_coef: relative classification weight applied to the no-object category
             losses: list of all the losses to be applied. See get_loss for list of available losses.
-            use_nwd: whether to add NWD (Normalized Wasserstein Distance) loss
-            nwd_weight: weight multiplier for NWD loss term (only used if use_nwd=True)
-            nwd_constant: dataset-dependent normalization constant C for NWD
+            use_small_object_aware_nwd: whether to add scale-aware NWD as an auxiliary box loss.
+            soa_nwd_constant: NWD normalization constant C in input-image pixels.
+            soa_nwd_input_size: image scale used to estimate target size from normalized boxes.
+            soa_nwd_small_threshold: targets with sqrt(w*h)*input_size below this value use small weight.
+            soa_nwd_medium_threshold: targets between small and medium thresholds use medium weight.
+            soa_nwd_small_weight: per-box NWD multiplier for small targets.
+            soa_nwd_medium_weight: per-box NWD multiplier for medium targets.
+            soa_nwd_large_weight: per-box NWD multiplier for large targets, usually 0.0.
+            soa_nwd_main_only: if True, applies NWD only to the final decoder output, not aux/dn outputs.
         """
         super().__init__()
         self.num_classes = num_classes
         self.matcher = matcher
         self.weight_dict = weight_dict
         self.losses = losses
-        self.use_nwd = use_nwd
-        self.nwd_weight = nwd_weight
-        self.nwd_constant = nwd_constant
+        self.use_small_object_aware_nwd = use_small_object_aware_nwd
+        self.soa_nwd_constant = float(soa_nwd_constant)
+        self.soa_nwd_input_size = float(soa_nwd_input_size)
+        self.soa_nwd_small_threshold = float(soa_nwd_small_threshold)
+        self.soa_nwd_medium_threshold = float(soa_nwd_medium_threshold)
+        self.soa_nwd_small_weight = float(soa_nwd_small_weight)
+        self.soa_nwd_medium_weight = float(soa_nwd_medium_weight)
+        self.soa_nwd_large_weight = float(soa_nwd_large_weight)
+        self.soa_nwd_main_only = bool(soa_nwd_main_only)
 
         empty_weight = torch.ones(self.num_classes + 1)
         empty_weight[-1] = eos_coef
@@ -156,7 +176,7 @@ class SetCriterion(nn.Module):
         losses = {'cardinality_error': card_err}
         return losses
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes):
+    def loss_boxes(self, outputs, targets, indices, num_boxes, apply_soa_nwd=True):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
            The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
@@ -176,31 +196,41 @@ class SetCriterion(nn.Module):
                 box_cxcywh_to_xyxy(target_boxes)))
         losses['loss_giou'] = loss_giou.sum() / num_boxes
 
-        if self.use_nwd:
-            loss_nwd = self._compute_nwd_loss(src_boxes, target_boxes)
-            losses['loss_nwd'] = loss_nwd.sum() / num_boxes
+        if self.use_small_object_aware_nwd and apply_soa_nwd:
+            loss_soa_nwd = self._compute_small_object_aware_nwd_loss(src_boxes, target_boxes)
+            losses['loss_soa_nwd'] = loss_soa_nwd.sum() / num_boxes
         return losses
 
-    def _compute_nwd_loss(self, pred_boxes, target_boxes):
-        """Normalized Wasserstein Distance loss.
+    def _compute_small_object_aware_nwd_loss(self, pred_boxes, target_boxes):
+        """Small-object-aware Normalized Wasserstein Distance loss.
 
-        Models each bounding box as a 2D Gaussian distribution:
+        The base NWD term models each box as a 2D Gaussian distribution:
           mu = [cx, cy]
           Sigma = diag(w^2/4, h^2/4)
 
-        Then W_2^2(N_pred, N_gt) = ||[cx_p,cy_p,w_p/2,h_p/2] - [cx_g,cy_g,w_g/2,h_g/2]||_2^2
-
+        W_2^2(N_pred, N_gt) = ||[cx_p, cy_p, w_p/2, h_p/2]
+                                  - [cx_g, cy_g, w_g/2, h_g/2]||_2^2
         NWD = exp(-sqrt(W_2^2) / C)
         L_NWD = 1 - NWD
 
+        Unlike the previous global NWD loss, this version assigns a per-target
+        multiplier according to the target size after scaling to the input size:
+          s = sqrt(w_gt * h_gt) * soa_nwd_input_size
+          s < small_threshold       -> small_weight
+          small_threshold <= s < medium_threshold -> medium_weight
+          s >= medium_threshold     -> large_weight
+
         Args:
-            pred_boxes: [N, 4] in (cx, cy, w, h) normalized
-            target_boxes: [N, 4] in (cx, cy, w, h) normalized
-            C: normalization constant (nwd_constant)
+            pred_boxes: [N, 4] in normalized (cx, cy, w, h)
+            target_boxes: [N, 4] in normalized (cx, cy, w, h)
         Returns:
-            loss_nwd: [N]
+            loss_soa_nwd: [N], already multiplied by per-target scale-aware weights
         """
-        C = self.nwd_constant / 640.0  # normalize to [0,1] coordinates
+        if pred_boxes.numel() == 0:
+            return pred_boxes.new_zeros((0,))
+
+        C = max(self.soa_nwd_constant / max(self.soa_nwd_input_size, 1.0), 1e-6)
+
         pred = torch.stack([
             pred_boxes[:, 0], pred_boxes[:, 1],
             pred_boxes[:, 2] / 2.0, pred_boxes[:, 3] / 2.0,
@@ -209,9 +239,26 @@ class SetCriterion(nn.Module):
             target_boxes[:, 0], target_boxes[:, 1],
             target_boxes[:, 2] / 2.0, target_boxes[:, 3] / 2.0,
         ], dim=-1)
+
         w2 = torch.sum((pred - tgt) ** 2, dim=-1)
-        nwd = torch.exp(-torch.sqrt(w2) / C)
-        return self.nwd_weight * (1.0 - nwd)
+        nwd = torch.exp(-torch.sqrt(w2 + 1e-9) / C)
+        base_loss = 1.0 - nwd
+
+        target_area = torch.clamp(target_boxes[:, 2] * target_boxes[:, 3], min=0.0)
+        target_size = torch.sqrt(target_area) * self.soa_nwd_input_size
+        scale_weight = torch.full_like(target_size, self.soa_nwd_large_weight)
+        scale_weight = torch.where(
+            target_size < self.soa_nwd_medium_threshold,
+            torch.full_like(scale_weight, self.soa_nwd_medium_weight),
+            scale_weight,
+        )
+        scale_weight = torch.where(
+            target_size < self.soa_nwd_small_threshold,
+            torch.full_like(scale_weight, self.soa_nwd_small_weight),
+            scale_weight,
+        )
+
+        return base_loss * scale_weight
 
     def loss_masks(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the masks: the focal loss and the dice loss.
@@ -306,6 +353,9 @@ class SetCriterion(nn.Module):
                     if loss == 'labels':
                         # Logging is enabled only for the last layer
                         kwargs = {'log': False}
+                    elif loss == 'boxes' and self.soa_nwd_main_only:
+                        # Keep the scale-aware NWD term conservative: final decoder output only.
+                        kwargs = {'apply_soa_nwd': False}
 
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
                     l_dict = {k: l_dict[k] * self.weight_dict[k] for k in l_dict if k in self.weight_dict}
@@ -328,6 +378,9 @@ class SetCriterion(nn.Module):
                     if loss == 'labels':
                         # Logging is enabled only for the last layer
                         kwargs = {'log': False}
+                    elif loss == 'boxes' and self.soa_nwd_main_only:
+                        # Keep the scale-aware NWD term conservative: final decoder output only.
+                        kwargs = {'apply_soa_nwd': False}
 
                     l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
                     l_dict = {k: l_dict[k] * self.weight_dict[k] for k in l_dict if k in self.weight_dict}
